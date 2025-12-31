@@ -1,4 +1,4 @@
-# Document Intelligence Prototype: Block Storage Engine
+# Block Storage Engine
 
 A Go-based microservice designed to handle document ingestion using a strict **1MB block-level storage** constraint. This prototype implements a Virtual File System layer that abstracts physical blocks into logical documents.
 
@@ -25,7 +25,7 @@ The system uses a "Store & Map" strategy to manage files larger than the 1MB lim
 
 ---
 
-## 🛠️ Technical Implementation
+## Technical Implementation
 
 ### Key Logic Flow
 1. **Ingestion:** The client streams a file to the `/upload` endpoint.
