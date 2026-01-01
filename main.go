@@ -21,61 +21,78 @@ const (
 
 type Registry struct {
 	mu sync.RWMutex
+	FileManifest  map[string][]string
+	InvertedIndex map[string][]string // keyword ->[]]filenames
 }
 
 func main() {
-	// Initialize directories
 	_ = os.MkdirAll(StorageDir, 0755)
 	_ = os.MkdirAll(ManifestDir, 0755)
 
-	reg := &Registry{}
+	reg := &Registry{
+		InvertedIndex: make(map[string][]string),
+	}
+
 	r := gin.Default()
 
 	r.POST("/upload", reg.HandleUpload)
+	r.GET("/search", reg.HandleSearch) // Task 2: Intelligence Endpoint
 	r.GET("/download/:filename", reg.HandleDownload)
 
-	fmt.Println(" Block Storage Service starting on port 8080")
+	fmt.Println("🚀 Document Intelligence System active on :8080")
 	r.Run(":8080")
+}
+
+func (reg *Registry) HandleSearch(c *gin.Context) {
+	query := strings.ToLower(c.Query("q"))
+	if query == "" {
+		c.JSON(400, gin.H{"error": "Query 'q' is required"})
+		return
+	}
+
+	reg.mu.RLock()
+	results := reg.InvertedIndex[query]
+	reg.mu.RUnlock()
+
+	c.JSON(200, gin.H{
+		"keyword":  query,
+		"found_in": results,
+		"count":    len(results),
+	})
 }
 
 func (reg *Registry) HandleUpload(c *gin.Context) {
 	file, header, err := c.Request.FormFile("document")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No file uploaded"})
+		c.JSON(400, gin.H{"error": "No file uploaded"})
 		return
 	}
 	defer file.Close()
 
 	var blockIDs []string
-	buffer := make([]byte, MaxBlockSize) // 1MB buffer"
+	buffer := make([]byte, MaxBlockSize)
 
 	for {
 		n, err := file.Read(buffer)
 		if n > 0 {
-			chunk := buffer[:n] // Handles the "Tail Block" fragment
-
+			chunk := buffer[:n]
 			blockID := fmt.Sprintf("%x", sha256.Sum256(chunk))
 
-			// 2. Persist to Disk (Deduplication)
-			savePath := filepath.Join(StorageDir, blockID)
-			if _, existsErr := os.Stat(savePath); os.IsNotExist(existsErr) {
-				_ = os.WriteFile(savePath, chunk, 0644)
+			// Store Block
+			path := filepath.Join(StorageDir, blockID)
+			if _, e := os.Stat(path); os.IsNotExist(e) {
+				_ = os.WriteFile(path, chunk, 0644)
 			}
-
 			blockIDs = append(blockIDs, blockID)
+
+			// Index this block's text immediately
+			reg.indexText(header.Filename, chunk)
 		}
-		if err == io.EOF {
-			break
-		}
+		if err == io.EOF { break }
 	}
 
 	reg.saveManifest(header.Filename, blockIDs)
-
-	c.JSON(http.StatusOK, gin.H{
-		"filename":    header.Filename,
-		"block_count": len(blockIDs),
-		"status":      "File shredded into 1MB blocks",
-	})
+	c.JSON(200, gin.H{"status": "File indexed and stored", "blocks": len(blockIDs)})
 }
 
 func (reg *Registry) HandleDownload(c *gin.Context) {
@@ -120,4 +137,32 @@ func (reg *Registry) loadManifest(filename string) ([]string, error) {
 	}
 
 	return strings.Split(strings.TrimSpace(string(data)), "\n"), nil
+}
+
+func (reg *Registry) indexText(filename string, content []byte) {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	// function to split by any non-alphanumeric character
+	splitter := func(c rune) bool {
+		return c == ',' || c == ':' || c == ';' || c == ' ' || c == '\n' || c == '\t' || c == '"' || c == '_'
+	}
+	words := strings.FieldsFunc(strings.ToLower(string(content)), splitter)
+	for _, word := range words {
+		word = strings.TrimSpace(word)
+		if len(word) < 3 {
+			continue
+		}
+
+		exists := false
+		for _, f := range reg.InvertedIndex[word] {
+			if f == filename {
+				exists = true
+				break
+			}
+		}
+
+		if !exists {
+			reg.InvertedIndex[word] = append(reg.InvertedIndex[word], filename)
+		}
+	}
 }
