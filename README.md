@@ -1,51 +1,43 @@
-# Block Storage Engine
+# Document Intelligence Prototype: Block Storage & Search Engine
 
-A Go-based microservice designed to handle document ingestion using a strict **1MB block-level storage** constraint. This prototype implements a Virtual File System layer that abstracts physical blocks into logical documents.
+A high-performance Go microservice that handles document ingestion by shredding files into **strict 1MB blocks** and providing **Intelligence-driven keyword search** across the document library.
 
 ## Project Overview
 
-This prototype addresses the challenge of storing large documents by "shredding" them into standardized 1MB segments. It ensures memory efficiency and storage optimization through Content-Addressable Storage (CAS).
-
-### Core Requirements (Task 1)
-* **Block Constraint:** Maximum storage unit is 1MB.
-* **Interface:** Exposed as a RESTful Microservice via the Gin framework.
-* **Storage Strategy:** Content-Addressable Storage for built-in deduplication.
+This system solves two primary challenges:
+1.  **Task 1 (Storage):** Abstracting large files into a Content-Addressable Storage (CAS) layer using 1MB blocks.
+2.  **Task 2 (Intelligence):** Providing instant keyword search across all documents using a memory-mapped Inverted Index.
 
 ---
 
-## Data Architecture
+## Technical Architecture
 
-The system uses a "Store & Map" strategy to manage files larger than the 1MB limit.
+### 1. Storage Layer (The Shredder)
+* **1MB Block Constraint:** Files are processed through a fixed-size memory buffer. A 10MB file becomes 10 independent blocks.
+* **Content-Addressable Storage (CAS):** Each block is named after its **SHA-256 hash**. 
+* **Deduplication:** If two different files contain the same 1MB of data, the block is stored only once on disk.
+* **Manifest System:** A `.txt` manifest maps the original filename to the ordered sequence of block hashes for reassembly.
 
-1. **The Shredder:** Incoming file streams are read into a fixed 1MB buffer.
-2. **The CAS Layer:** Each block is hashed using **SHA-256**. The hash serves as the block's unique ID and filename.
-3. **The Manifest:** A metadata file (`.txt`) stores the ordered sequence of Block IDs required to reconstruct the original document.
 
 
+### 2. Intelligence Layer (Inverted Index)
+The search engine does not scan files during a query. Instead, it builds an **Inverted Index** during the upload phase.
+* **Logic:** Instead of `File -> Words`, we store `Word -> [Files]`.
+* **Advanced Tokenization:** The engine splits text using a custom `FieldsFunc` (delimiters: `, : ; " _ \n \t`) to correctly index data in JSON and CSV formats.
+* **Search Complexity:** $O(1)$ constant time lookup via memory map.
 
----
 
-## Technical Implementation
-
-### Key Logic Flow
-1. **Ingestion:** The client streams a file to the `/upload` endpoint.
-2. **Chunking:** The server fills a 1MB buffer.
-3. **Deduplication:** Before writing to disk, the server checks if a block with that hash already exists.
-4. **Persistence:** Unique blocks are saved to `./data/blocks`.
-5. **Registration:** A manifest is saved to `./data/manifests` only after the final block is successfully written.
 
 ---
 
-## Edge Cases Handled
+## Implementation Details & Edge Cases
 
-| Edge Case | Risk | Resolution |
+| Feature | Handling Logic | Why? |
 | :--- | :--- | :--- |
-| **File > 1MB** | RAM Exhaustion | **Streaming Buffer:** Reuses a fixed 1MB RAM buffer regardless of total file size. |
-| **Tail Blocks** | Data Corruption | **Slice Tracking:** The final chunk is sliced to the exact byte count (`n`), avoiding zero-padding. |
-| **Duplicate Content** | Disk Bloat | **CAS Hashing:** Identical blocks across different files are stored only once. |
-| **Partial Uploads** | Corrupt Files | **Atomic Manifests:** The manifest is only created upon successful completion of the stream. |
-
-
+| **Tail Blocks** | `buffer[:n]` slicing | Ensures the final chunk of a file isn't padded with empty bytes. |
+| **JSON/CSV Search** | Delimiter-based splitting | Correctly identifies words in strings. |
+| **Memory Ceiling** | Streaming ingestion | The service never loads the full file into RAM; it only ever "sees" 1MB at a time. |
+| **Case Sensitivity** | Case Folding | All keywords are lowercased to ensure `UUID` and `uuid` yield the same results. |
 
 ---
 
@@ -53,8 +45,29 @@ The system uses a "Store & Map" strategy to manage files larger than the 1MB lim
 
 ### Prerequisites
 * Go 1.18+
-* Gin Web Framework: `go get github.com/gin-gonic/gin`
+* Gin Framework: `go get github.com/gin-gonic/gin`
 
-### Running the Service
+### API Usage
+
+#### 1. Ingest a Document (Task 1 & 2)
+Uploads, shreds, and indexes the document.
 ```bash
-go run main.go
+curl -F "document=@stageUserInfo.json" http://localhost:8080/upload
+```
+#### 2. Intelligence Search (Task 2)
+Search for any keyword
+```bash
+curl "http://localhost:8080/search?q=uuid"
+```
+#### 3. Reassemble and Download
+Reconstructs the original file from the 1MB blocks.
+```bash
+curl http://localhost:8080/download/stageUserInfo.json --output downloaded.json
+```
+---
+### Logic Assumptions
+**Text Processing: The intelligence engine assumes files are UTF-8 compatible. Binary files (like JPEGs) will be indexed as gibberish.**
+
+**In-Memory Index: For this prototype, the search index is held in RAM. (For production, this would be persisted to a Key-Value store).**
+
+**Keyword Length: Words shorter than 3 characters are ignored to prevent index bloat from common words (e.g., "is", "a", "the").**
