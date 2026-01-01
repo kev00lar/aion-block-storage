@@ -29,7 +29,7 @@ The system uses a "Store & Map" strategy to manage files larger than the 1MB lim
 
 ### Key Logic Flow
 1. **Ingestion:** The client streams a file to the `/upload` endpoint.
-2. **Chunking:** The server fills a 1MB "measuring cup" (buffer).
+2. **Chunking:** The server fills a 1MB buffer.
 3. **Deduplication:** Before writing to disk, the server checks if a block with that hash already exists.
 4. **Persistence:** Unique blocks are saved to `./data/blocks`.
 5. **Registration:** A manifest is saved to `./data/manifests` only after the final block is successfully written.
